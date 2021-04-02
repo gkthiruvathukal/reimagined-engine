@@ -4,17 +4,20 @@ interface WalkEventObserver {
   visitFile(gfile: GoogleAppsScript.Drive.File, depth : number): void
 }
 
+var par_headings = {
+  0: DocumentApp.ParagraphHeading.HEADING1,
+  1: DocumentApp.ParagraphHeading.HEADING2,
+  2: DocumentApp.ParagraphHeading.HEADING3,
+  3: DocumentApp.ParagraphHeading.HEADING4,
+  4: DocumentApp.ParagraphHeading.HEADING5,
+  5: DocumentApp.ParagraphHeading.HEADING6
+}
+
 function applyParagraphHeading(depth: number, par: GoogleAppsScript.Document.Paragraph) : void {
-  if (depth == 0)
-    par.setHeading(DocumentApp.ParagraphHeading.HEADING1);
-  else if (depth == 1)
-    par.setHeading(DocumentApp.ParagraphHeading.HEADING2);
-  else if (depth == 2)
-    par.setHeading(DocumentApp.ParagraphHeading.HEADING3);
-  else if (depth == 3)
-    par.setHeading(DocumentApp.ParagraphHeading.HEADING4);
-  else if (depth == 4)
-    par.setHeading(DocumentApp.ParagraphHeading.HEADING5);
+  let headings_size = Object.keys(par_headings).length
+  if (depth < headings_size) {
+    par.setHeading( par_headings[depth]);
+  }
 }
 
 class WalkMe {
@@ -47,9 +50,70 @@ class WalkMe {
     style[DocumentApp.Attribute.FONT_FAMILY] = 'Calibri'
     style[DocumentApp.Attribute.BOLD] = true;
     par2.setAttributes(style)
+    let thisFileBody = openDocsFile(gfile.getId())
+    mergeContent(thisFileBody, this.body)
+    //retrieveComments(gfile.getId())
   }
 }
 
+function mergeContent(src: GoogleAppsScript.Document.Body, dst: GoogleAppsScript.Document.Body) {
+  let numChildren = src.getNumChildren()
+    for( let child = 0; child < numChildren; child++ ) {
+      let srcElement = src.getChild(child).copy();
+      var type = srcElement.getType();
+      if( type == DocumentApp.ElementType.PARAGRAPH ) {
+        let par = removeFootnotes(srcElement).asParagraph()
+        let par_level = par.getHeading()
+        //Logger.log(`par level ${par_level}`)
+        dst.appendParagraph(par);
+        //if (par_level == DocumentApp.ParagraphHeading.HEADING2) {
+        //  applyParagraphHeading(5, par);
+        //}
+      }
+      else if( type == DocumentApp.ElementType.TABLE )
+        dst.appendTable(srcElement.asTable());
+      else if( type == DocumentApp.ElementType.LIST_ITEM )
+        dst.appendListItem(srcElement.asListItem());
+      else if (type == DocumentApp.ElementType.HORIZONTAL_RULE)
+        dst.appendHorizontalRule();
+      else if (type == DocumentApp.ElementType.PAGE_BREAK)
+        dst.appendPageBreak();
+      else
+        Logger.log(`invalid child type detected ${type}`)
+    }
+  }
+}
+
+
+// Credit to https://stackoverflow.com/questions/62973123/cant-transfer-footnote-into-new-document-entire-function-fails
+// Until the bug in API is fixed, we'll bypass footnotes.
+
+function removeFootnotes(element : GoogleAppsScript.Document.Element) {
+  var removals: Array<GoogleAppsScript.Document.Element> = []
+  if( element.getType() == DocumentApp.ElementType.PARAGRAPH){
+    let num = element.asParagraph().getNumChildren();
+    Logger.log(`element has ${num} children`)
+    for( let i = 0; i < num; i++ ) {
+      let child = element.asParagraph().getChild(i);
+      let childType = child.getType();        
+      Logger.log(`child ${i} has type ${childType}`)
+      if (childType == DocumentApp.ElementType.TEXT) {
+        let childText = child.asText().getText()
+        Logger.log(`child text = ${childText}`)
+      }
+      if( childType == DocumentApp.ElementType.FOOTNOTE){
+        let footnoteText = child.asFootnote().getFootnoteContents();
+        Logger.log(`marking child ${i} footnote element for removal ${footnoteText}`);
+        removals.push(child)
+      }
+    }
+    for (let i=0; i < removals.length; i++) {
+      Logger.log(`removing footnote ${i} of ${removals.length} outside of loop`)
+      removals[i].removeFromParent()
+    }
+    return element;
+  }
+}
 
 function walkGoogleFolder(folder : GoogleAppsScript.Drive.Folder, observer : WalkEventObserver) {
    walkGoogleFolderRecursive(folder, 0, observer)
@@ -57,11 +121,13 @@ function walkGoogleFolder(folder : GoogleAppsScript.Drive.Folder, observer : Wal
 
 function walkGoogleFolderRecursive(folder : GoogleAppsScript.Drive.Folder, depth : number, observer : WalkEventObserver) {
   let folderName = folder.getName()
-  Logger.log(`Visiting ${folderName}`)
+  Logger.log(`Visiting folder ${folderName}`)
   let subFolders = folder.getFolders()
   let files = folder.getFiles()
   while (files.hasNext()) {
     let gfile = files.next()
+    let gfilename = gfile.getName()
+    Logger.log(`Visiting file ${gfilename}`)
     observer.visitFile(gfile, depth)
   }
   while (subFolders.hasNext()) {
@@ -83,6 +149,11 @@ function openTargetDocBody(docName) : GoogleAppsScript.Document.Body {
     return doc.getBody()
   }
   else return null
+}
+
+function openDocsFile(docId) : GoogleAppsScript.Document.Body {
+  let doc = DocumentApp.openById(docId)
+  return doc.getBody()
 }
 
 function initializeBody(body: GoogleAppsScript.Document.Body ) {
